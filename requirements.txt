@@ -1,0 +1,26 @@
+# DocuMind — Requirements
+# Install all dependencies with: pip install -r requirements.txt
+
+# --- Web UI ---
+streamlit>=1.35.0
+
+# --- PDF Reading ---
+# PyMuPDF provides the 'fitz' module for reading PDFs
+PyMuPDF>=1.24.0
+
+# --- Embeddings ---
+# sentence-transformers downloads and runs the embedding model locally
+sentence-transformers>=3.0.0
+
+# --- Vector Database ---
+# faiss-cpu is the CPU version of Facebook's FAISS library
+# If you have a GPU, you can use faiss-gpu instead
+faiss-cpu>=1.8.0
+
+# --- Numerical Computing ---
+# numpy is used for working with embedding vectors (arrays of numbers)
+numpy>=1.24.0
+
+# --- HTTP Requests ---
+# requests is used to communicate with the Ollama API
+requests>=2.31.0
