@@ -30,9 +30,14 @@ HOW THIS MODULE WORKS:
         build prompt → call Qwen → return answer + sources
 """
 
+import time
+
+import numpy as np
 import requests   # For making HTTP requests to Ollama's local REST API
+from sentence_transformers import SentenceTransformer
 from src.embeddings import embed_query
 from src.vector_store import search_index
+from validation import calculate_performance_metrics
 
 # -----------------------------------------------------------------
 # CONFIGURATION — Change model name here if you switch Qwen versions
@@ -47,6 +52,32 @@ OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
 # How many top-matching chunks to retrieve from FAISS for each question.
 TOP_K_RESULTS = 5
+
+
+def calculate_grounding_proxy(
+    answer: str,
+    context_chunks: list[dict],
+    embedding_model: SentenceTransformer
+) -> dict[str, str | int | float] | None:
+    """Return the strongest answer-to-context cosine similarity, not an accuracy score."""
+    if not answer.strip() or not context_chunks:
+        return None
+
+    texts = [answer] + [chunk["text"] for chunk in context_chunks]
+    vectors = embedding_model.encode(
+        texts,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+    )
+    similarities = vectors[1:] @ vectors[0]
+    best_index = int(np.argmax(similarities))
+    best_chunk = context_chunks[best_index]
+
+    return {
+        "cosine_similarity": float(np.clip(similarities[best_index], -1.0, 1.0)),
+        "source": best_chunk["source"],
+        "page": best_chunk["page"],
+    }
 
 
 # -----------------------------------------------------------------
@@ -111,20 +142,22 @@ ANSWER:"""
 # OLLAMA COMMUNICATION
 # -----------------------------------------------------------------
 
-def query_ollama(prompt: str) -> str:
+def query_ollama(
+    prompt: str
+) -> tuple[str, dict[str, float | int | None]]:
     """
     Sends a prompt to the Ollama API and returns the model's response.
 
     Ollama runs as a local server at http://localhost:11434.
     We send a POST request with the model name and prompt.
 
-    The response is returned as a plain string.
+    Returns the answer and the measured Ollama performance metrics.
 
     Parameters:
     - prompt: The full prompt string to send to the model.
 
     Returns:
-    - The model's answer as a string.
+    - A tuple containing the model's answer and its performance metrics.
 
     Raises:
     - ConnectionError if Ollama is not running.
@@ -139,7 +172,9 @@ def query_ollama(prompt: str) -> str:
     }
 
     try:
+        request_start = time.perf_counter()
         response = requests.post(OLLAMA_API_URL, json=payload, timeout=120)
+        request_latency = time.perf_counter() - request_start
         # timeout=120 → wait up to 2 minutes for the model to respond
     except requests.exceptions.ConnectionError:
         raise ConnectionError(
@@ -158,8 +193,9 @@ def query_ollama(prompt: str) -> str:
     # The Ollama API returns a JSON object. The model's answer is in 'response'.
     result = response.json()
     answer = result.get("response", "").strip()
+    performance = calculate_performance_metrics(result, request_latency)
 
-    return answer
+    return answer, performance
 
 
 # -----------------------------------------------------------------
@@ -188,34 +224,50 @@ def answer_question(
     - chunks:          The list of chunk dicts (text + source + page).
     - embedding_model: The loaded SentenceTransformer model.
 
-    Returns a dict:
+    Returns a dict with the answer, sources, and measured performance:
     {
         "answer": "The minimum attendance is 75%.",
         "sources": [
             {"source": "Rules.pdf", "page": 3},
             {"source": "Handbook.pdf", "page": 7}
-        ]
+        ],
+        "performance": {"tokens_per_second": 42.0}
     }
     """
 
+    pipeline_start = time.perf_counter()
+
     # STEP 1: Convert the user's question into an embedding vector
+    embedding_start = time.perf_counter()
     query_vector = embed_query(user_question, embedding_model)
+    embedding_seconds = time.perf_counter() - embedding_start
 
     # STEP 2: Search FAISS for the top-k most similar chunks
+    retrieval_start = time.perf_counter()
     relevant_chunks = search_index(query_vector, faiss_index, chunks, top_k=TOP_K_RESULTS)
+    retrieval_seconds = time.perf_counter() - retrieval_start
 
     # If FAISS returns nothing, we can't answer
     if not relevant_chunks:
         return {
             "answer": "I couldn't find sufficient information about this in the uploaded documents.",
-            "sources": []
+            "sources": [],
+            "performance": {
+                "query_embedding_seconds": embedding_seconds,
+                "retrieval_seconds": retrieval_seconds,
+                "rag_pipeline_seconds": time.perf_counter() - pipeline_start,
+            },
+            "quality": {"grounding_proxy": None},
         }
 
     # STEP 3: Build the prompt using the retrieved chunks
     prompt = build_prompt(relevant_chunks, user_question)
 
     # STEP 4: Call the Qwen model via Ollama
-    answer = query_ollama(prompt)
+    answer, performance = query_ollama(prompt)
+    grounding_proxy = calculate_grounding_proxy(
+        answer, relevant_chunks, embedding_model
+    )
 
     # STEP 5: Compile unique source citations from the retrieved chunks
     # We deduplicate using a set of (source, page) tuples
@@ -229,5 +281,12 @@ def answer_question(
 
     return {
         "answer": answer,
-        "sources": sources
+        "sources": sources,
+        "performance": {
+            **performance,
+            "query_embedding_seconds": embedding_seconds,
+            "retrieval_seconds": retrieval_seconds,
+            "rag_pipeline_seconds": time.perf_counter() - pipeline_start,
+        },
+        "quality": {"grounding_proxy": grounding_proxy},
     }

@@ -22,6 +22,7 @@ HOW TO RUN:
   streamlit run app.py
 """
 
+import json
 import os
 import tempfile
 import streamlit as st
@@ -32,6 +33,7 @@ from src.chunker import chunk_pages
 from src.embeddings import load_embedding_model, embed_texts
 from src.vector_store import build_faiss_index
 from src.rag import answer_question, OLLAMA_MODEL
+from validation import calculate_answer_scores, summarize_benchmark
 
 # -----------------------------------------------------------------
 # CONFIGURATION
@@ -246,8 +248,72 @@ def init_session_state():
     if "documents_ready" not in st.session_state:
         st.session_state.documents_ready = False  # Whether documents have been processed
 
+    if "benchmark_results" not in st.session_state:
+        st.session_state.benchmark_results = None
+
 
 init_session_state()
+
+
+def render_performance_metrics(performance: dict):
+    """Display measured timings and token throughput for one answer."""
+    metric_specs = (
+        ("Request latency", "request_latency_seconds", "Client wall-clock time for the Ollama API request.", "seconds"),
+        ("Ollama total", "ollama_total_seconds", "Total processing time reported by Ollama.", "seconds"),
+        ("Model load", "model_load_seconds", "Time Ollama spent loading the model.", "seconds"),
+        ("Prompt processing", "prompt_processing_seconds", "Time spent processing input tokens.", "seconds"),
+        ("Prompt tokens", "prompt_tokens", "Input tokens counted by Ollama.", "count"),
+        ("Prompt throughput", "prompt_tokens_per_second", "Prompt tokens divided by prompt-processing seconds.", "tokens/sec"),
+        ("Generation", "generation_seconds", "Time spent generating output tokens.", "seconds"),
+        ("Output tokens", "output_tokens", "Output tokens counted by Ollama.", "count"),
+        ("Generation throughput", "tokens_per_second", "Output tokens divided by generation seconds.", "tokens/sec"),
+        ("Query embedding", "query_embedding_seconds", "Time to embed the user's question.", "seconds"),
+        ("Document retrieval", "retrieval_seconds", "Time to search the FAISS index.", "seconds"),
+        ("RAG pipeline total", "rag_pipeline_seconds", "Embedding, retrieval, prompt creation, and generation.", "seconds"),
+    )
+    available_metrics = [
+        (label, performance.get(key), help_text, unit)
+        for label, key, help_text, unit in metric_specs
+        if performance.get(key) is not None
+    ]
+
+    with st.expander("📈 Performance for this answer"):
+        for start in range(0, len(available_metrics), 3):
+            columns = st.columns(3)
+            for column, (label, value, help_text, unit) in zip(
+                columns, available_metrics[start:start + 3]
+            ):
+                if unit == "seconds":
+                    display_value = f"{value:.3f} s"
+                elif unit == "tokens/sec":
+                    display_value = f"{value:.2f} tokens/s"
+                else:
+                    display_value = str(value)
+                column.metric(label, display_value, help=help_text)
+
+
+def render_quality_metrics(quality: dict):
+    """Display the embedding-based grounding proxy with its strongest source."""
+    grounding = quality.get("grounding_proxy")
+    if grounding is None:
+        return
+
+    with st.expander("🔎 Answer grounding (proxy, not accuracy)"):
+        st.metric(
+            "Best context cosine similarity",
+            f"{grounding['cosine_similarity']:.3f}",
+            help=(
+                "Cosine similarity between the answer and each retrieved chunk; "
+                "the highest score is shown. Similarity does not prove the answer "
+                "is entailed by or factually correct according to the document."
+            ),
+        )
+        st.caption(
+            "Closest retrieved passage: "
+            f"{grounding['source']} — Page {grounding['page']}. "
+            "Use the reference-answer benchmark below to measure exact-match "
+            "accuracy on questions with verified answers."
+        )
 
 
 # -----------------------------------------------------------------
@@ -329,6 +395,7 @@ if reset_button:
     st.session_state.processed_files = []
     st.session_state.chat_history = []
     st.session_state.documents_ready = False
+    st.session_state.benchmark_results = None
     st.success("✅ Session cleared. You can now upload new documents.")
     st.rerun()
 
@@ -424,6 +491,7 @@ if process_button:
                 st.session_state.processed_files = [f.name for f in uploaded_files]
                 st.session_state.documents_ready = True
                 st.session_state.chat_history = []  # Clear old chat on new upload
+                st.session_state.benchmark_results = None
 
                 # --------------------------------------------------
                 # SUCCESS: Show summary
@@ -473,6 +541,143 @@ if not st.session_state.documents_ready:
 
 else:
     st.caption(f"Using model: **{OLLAMA_MODEL}** via Ollama")
+    with st.expander("How performance is calculated"):
+        st.markdown(
+            """
+These are **speed and throughput measurements**, not an answer-accuracy score.
+
+- **Request latency** uses Python's `time.perf_counter()` around the Ollama HTTP request.
+- **Ollama total, model load, prompt processing, and generation times** come from Ollama's response in nanoseconds and are converted to seconds by dividing by 1,000,000,000.
+- **Prompt/output token counts** come from Ollama's tokenizer counters.
+- **Prompt throughput** = prompt tokens ÷ prompt-processing seconds.
+- **Generation throughput** = output tokens ÷ generation seconds.
+- **Query embedding** and **document retrieval** are timed separately; **RAG pipeline total** measures the complete question-answer path.
+
+Timings vary with hardware, model warm-up, and prompt length. The answer-grounding cosine similarity is a semantic similarity proxy, not a probability or proof of factual support. Accuracy is measured only by comparing answers to verified references in the benchmark below.
+"""
+        )
+
+    with st.expander("🧪 Evaluate answer accuracy with a reference benchmark"):
+        st.markdown(
+            "Create a JSON file with questions and **verified expected answers**. "
+            "Exact-match accuracy is the percentage of generated answers that match "
+            "after lowercasing and ignoring punctuation. Token F1 gives partial credit "
+            "for overlapping words."
+        )
+        benchmark_template = json.dumps(
+            [
+                {
+                    "question": "Replace with a question answerable from your PDFs",
+                    "expected_answer": "Replace with the verified answer from your PDFs",
+                }
+            ],
+            indent=2,
+        )
+        st.download_button(
+            "Download benchmark JSON template",
+            data=benchmark_template,
+            file_name="documind_benchmark_template.json",
+            mime="application/json",
+        )
+        benchmark_file = st.file_uploader(
+            "Upload your benchmark JSON",
+            type=["json"],
+            key="benchmark_uploader",
+        )
+
+        if st.button("Run answer accuracy benchmark", disabled=benchmark_file is None):
+            try:
+                benchmark_cases = json.loads(benchmark_file.getvalue())
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                st.error(f"Invalid benchmark JSON: {error}")
+            else:
+                valid_cases = (
+                    isinstance(benchmark_cases, list)
+                    and bool(benchmark_cases)
+                    and all(
+                        isinstance(case, dict)
+                        and isinstance(case.get("question"), str)
+                        and bool(case["question"].strip())
+                        and isinstance(case.get("expected_answer"), str)
+                        and bool(case["expected_answer"].strip())
+                        for case in benchmark_cases
+                    )
+                )
+                if not valid_cases:
+                    st.error(
+                        "The benchmark must be a non-empty JSON array of objects, "
+                        "each with non-empty string fields 'question' and "
+                        "'expected_answer'."
+                    )
+                else:
+                    results = []
+                    try:
+                        with st.spinner(
+                            f"Evaluating {len(benchmark_cases)} benchmark questions..."
+                        ):
+                            for case in benchmark_cases:
+                                result = answer_question(
+                                    user_question=case["question"],
+                                    faiss_index=st.session_state.faiss_index,
+                                    chunks=st.session_state.chunks,
+                                    embedding_model=st.session_state.embedding_model,
+                                )
+                                scores = calculate_answer_scores(
+                                    result["answer"], case["expected_answer"]
+                                )
+                                results.append({
+                                    "question": case["question"],
+                                    "expected_answer": case["expected_answer"],
+                                    "answer": result["answer"],
+                                    **scores,
+                                    "grounding_proxy": result["quality"][
+                                        "grounding_proxy"
+                                    ],
+                                })
+                    except (ConnectionError, TimeoutError, RuntimeError) as error:
+                        st.error(f"Benchmark stopped because answer generation failed: {error}")
+                    else:
+                        st.session_state.benchmark_results = {
+                            "file_name": benchmark_file.name,
+                            "results": results,
+                            "summary": summarize_benchmark(results),
+                        }
+
+        benchmark_results = st.session_state.benchmark_results
+        if benchmark_results:
+            st.caption(f"Results for `{benchmark_results['file_name']}`")
+            summary = benchmark_results["summary"]
+            metric_columns = st.columns(3)
+            metric_columns[0].metric(
+                "Exact-match accuracy",
+                f"{summary['exact_match_accuracy']:.1%}",
+                help="Exact normalized answer matches divided by benchmark questions.",
+            )
+            metric_columns[1].metric(
+                "Mean token F1",
+                f"{summary['mean_token_f1']:.1%}",
+                help="Macro-average of per-answer token precision/recall F1.",
+            )
+            metric_columns[2].metric("Questions", summary["question_count"])
+            st.caption(
+                "These scores apply only to this user-provided benchmark and model run. "
+                "Review each answer; exact match can mark valid paraphrases as incorrect."
+            )
+            st.table([
+                {
+                    "Question": item["question"],
+                    "Expected answer": item["expected_answer"],
+                    "Generated answer": item["answer"],
+                    "Exact match": item["exact_match"],
+                    "Token F1": f"{item['token_f1']:.1%}",
+                    "Grounding similarity (proxy)": (
+                        f"{item['grounding_proxy']['cosine_similarity']:.3f}"
+                        if item["grounding_proxy"] is not None
+                        else "N/A"
+                    ),
+                }
+                for item in benchmark_results["results"]
+            ])
 
     # ------------------------------------------------------------------
     # DISPLAY CHAT HISTORY
@@ -499,6 +704,11 @@ else:
                     sources_html += f'<div class="source-item">{i}. {src["source"]} — Page {src["page"]}</div>'
                 sources_html += "</div>"
                 st.markdown(sources_html, unsafe_allow_html=True)
+
+            if message.get("performance"):
+                render_performance_metrics(message["performance"])
+            if message.get("quality"):
+                render_quality_metrics(message["quality"])
 
     # ------------------------------------------------------------------
     # QUESTION INPUT
@@ -533,28 +743,40 @@ else:
 
                     answer = result["answer"]
                     sources = result["sources"]
+                    performance = result.get("performance")
+                    quality = result.get("quality")
 
                 except ConnectionError as e:
                     answer = f"⚠️ Ollama connection error: {str(e)}"
                     sources = []
+                    performance = None
+                    quality = None
 
                 except TimeoutError as e:
                     answer = f"⏱️ Timeout: {str(e)}"
                     sources = []
+                    performance = None
+                    quality = None
 
                 except RuntimeError as e:
                     answer = f"❌ Model error: {str(e)}"
                     sources = []
+                    performance = None
+                    quality = None
 
                 except Exception as e:
                     answer = f"❌ Unexpected error: {str(e)}"
                     sources = []
+                    performance = None
+                    quality = None
 
             # Add assistant response to chat history
             st.session_state.chat_history.append({
                 "role": "assistant",
                 "content": answer,
-                "sources": sources
+                "sources": sources,
+                "performance": performance,
+                "quality": quality,
             })
 
             # Rerun to show the updated chat history

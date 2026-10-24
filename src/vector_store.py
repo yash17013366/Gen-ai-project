@@ -83,7 +83,7 @@ def search_index(query_embedding: np.ndarray, index, chunks: list[dict], top_k: 
 
     # D = distances (how similar each result is — lower = better for L2)
     # I = indices (which chunks in our list are most similar)
-    D, I = index.search(query_embedding, top_k)
+    _, I = index.search(query_embedding, top_k)
 
     # I[0] gives us the list of indices for the first (and only) query row
     relevant_chunks = []

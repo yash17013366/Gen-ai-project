@@ -146,6 +146,46 @@ Open your browser at: **http://localhost:8501**
 
 ---
 
+## LLM Performance Metrics
+
+Expand **How performance is calculated** under the chat heading for the metric definitions. Each generated answer also has a **Performance for this answer** panel showing available measurements:
+
+| Metric | Source / calculation |
+|---|---|
+| Request latency | Client-side `time.perf_counter()` around the Ollama HTTP request |
+| Ollama total, model load, prompt processing, generation | Ollama's nanosecond durations divided by 1,000,000,000 |
+| Prompt and output tokens | Token counts reported by Ollama |
+| Prompt throughput | Prompt tokens ÷ prompt-processing seconds |
+| Generation throughput | Output tokens ÷ generation seconds |
+| Query embedding, document retrieval | Independently timed with `time.perf_counter()` |
+| RAG pipeline total | Time for the complete question-answer path, including Ollama generation |
+
+These measurements describe latency and throughput; they do **not** measure answer accuracy.
+
+### Answer quality and accuracy
+
+- **Answer grounding (proxy)** compares the generated answer embedding with each retrieved passage embedding and displays the highest cosine similarity, along with that passage's citation. This is a semantic similarity signal only; it is not a probability, entailment check, or proof that the answer is factually supported.
+- **Reference benchmark** lets you upload a JSON array of questions and verified expected answers. The app runs the RAG pipeline for each question and reports:
+  - **Exact-match accuracy**: the share of answers whose lowercased, punctuation-insensitive word sequence exactly matches the reference. Valid paraphrases can score as incorrect.
+  - **Mean token F1**: the average per-answer F1 based on overlapping words, useful for partial matches but not a substitute for human review.
+
+Use representative questions and carefully verified references for a meaningful benchmark. These scores describe only that dataset and run; review individual answers and citations before drawing conclusions.
+
+JSON format:
+
+```json
+[
+  {
+    "question": "What is the attendance requirement?",
+    "expected_answer": "The minimum attendance is 75%."
+  }
+]
+```
+
+Timings vary with hardware, model warm-up, and prompt length.
+
+---
+
 ## Configuration
 
 All key parameters are at the top of their respective files:
@@ -209,3 +249,40 @@ Expected response: *"I couldn't find sufficient information about this in the up
 
 **Out of memory**
 → Try using a smaller Qwen model like `qwen2.5:1.5b` or reduce `CHUNK_SIZE`.
+
+---
+
+## Performance and Accuracy — Quick Guide
+
+This section is a plain-language summary of the numbers DocuMind shows.
+
+### How fast is it?
+
+- **Request latency**: How long the app waits for Ollama to return an answer.
+- **Model load time**: How long Ollama takes to get the model ready. This can be higher the first time.
+- **Prompt processing**: How long the model takes to read the question and document passages.
+- **Generation time**: How long the model takes to write its answer.
+- **Prompt and output tokens**: The amount of text the model read and generated, counted in tokens (small pieces of text).
+- **Prompt and generation speed**: How many tokens the model reads or writes per second.
+- **Question embedding and document retrieval**: How long it takes to turn the question into a vector and find related passages in the PDFs.
+- **RAG pipeline total**: The overall time for the app to search the documents and generate an answer.
+
+These are speed measurements, not a rating of whether an answer is right. They can change depending on the computer, model warm-up, and question length.
+
+### Is the answer supported by the PDFs?
+
+The app shows **answer grounding similarity** by comparing the answer with the passages it retrieved. It displays the most similar passage and its source. A higher similarity means the wording is more alike; it does **not** prove that the answer is correct or supported by the passage.
+
+### How do we measure answer accuracy?
+
+Use **Evaluate answer accuracy with a reference benchmark** in the app. Upload a JSON file with questions and their verified expected answers. The app answers each question and compares its answer with the reference:
+
+- **Exact-match accuracy**: The percentage of answers that match the expected answer after ignoring capitalization and punctuation. A correct answer written differently may not count as a match.
+- **Mean token F1**: A partial-match score. It gives credit when the generated answer and expected answer share words, even if they are not identical.
+
+The benchmark scores apply only to the questions and expected answers you provide. Use a good set of representative questions, and review the answers yourself. DocuMind does not have one built-in accuracy percentage; an accuracy result is available only after you run it with a verified benchmark.
+
+Needed Commands -
+cd "D:\Gen AI Jury\Gen-ai-project"
+dir Gen-ai-project
+python -m streamlit run app.py

@@ -16,7 +16,7 @@ For each piece of text we extract, we keep track of:
 This metadata is CRITICAL because it allows us to show citations later.
 """
 
-import fitz  # PyMuPDF — used to read PDF files
+import pymupdf as fitz
 
 
 def extract_text_from_pdf(pdf_path: str, filename: str) -> list[dict]:
