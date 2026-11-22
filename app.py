@@ -8,6 +8,7 @@ import tempfile
 
 import streamlit as st
 
+from assets.styles import inject_css
 from src.chunker import chunk_pages
 from src.embeddings import EMBEDDING_MODEL_NAME, embed_texts, load_embedding_model
 from src.pdf_reader import extract_text_from_multiple_pdfs
@@ -141,93 +142,7 @@ def render_document_metrics() -> None:
 
 initialise_state()
 
-st.markdown(
-    """<style>
-    .stApp {
-        background: #F8F9FC;
-        color: #20243A;
-    }
-    html, body, [class*="css"], [data-testid="stSidebar"], button, input, textarea {
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    .block-container {max-width: 1060px; padding-top: 2.65rem; padding-bottom: 3rem;}
-    .documind-title {
-        color: #20243A; font-size: 2.45rem; font-weight: 750; letter-spacing: -.035em;
-        margin-bottom: .2rem;
-    }
-    .documind-subtitle {color: #687087; font-size: 1.05rem; margin-bottom: .5rem;}
-    .documind-tagline {
-        display: inline-block; color: #16866A; border: 1px solid #BDE5D8;
-        background: #EEF9F5; border-radius: 999px; padding: .35rem .78rem;
-        font-size: .82rem; font-weight: 650; margin-bottom: 1.7rem;
-    }
-    h1, h2, h3 {color: #20243A !important; letter-spacing: -.018em; font-weight: 700 !important;}
-    [data-testid="stSidebar"] {background: #FFFFFF; border-right: 1px solid #E4E8F0;}
-    [data-testid="stSidebar"] * {color: #20243A;}
-    [data-testid="stSidebar"] .stCaption {color: #687087 !important;}
-    [data-testid="stMetric"] {
-        background: #FFFFFF; border: 1px solid #E4E8F0;
-        border-radius: 14px; padding: .85rem 1rem; box-shadow: 0 6px 18px rgba(42, 53, 89, .065);
-    }
-    [data-testid="stMetricLabel"] {color: #687087 !important; font-size: .82rem; font-weight: 600;}
-    [data-testid="stMetricValue"] {color: #20243A !important; font-weight: 750;}
-    [data-testid="stChatMessage"] {
-        border: 1px solid #E4E8F0; border-radius: 16px;
-        background: #FFFFFF; margin-bottom: 1rem; padding: 1.05rem 1.1rem;
-        box-shadow: 0 7px 22px rgba(42, 53, 89, .055);
-    }
-    [data-testid="stChatInput"] {
-        border: 1px solid #D9DFF0; border-radius: 14px; background: #FFFFFF;
-        box-shadow: 0 7px 20px rgba(42, 53, 89, .06);
-    }
-    [data-testid="stChatInput"] textarea {color: #20243A !important;}
-    [data-testid="stFileUploader"] {
-        border: 1.5px dashed #B7C2E9; border-radius: 14px;
-        background: #FFFFFF; padding: .35rem .6rem; box-shadow: 0 6px 18px rgba(42, 53, 89, .045);
-    }
-    .stButton > button {
-        background: #FFFFFF; color: #5267D8; border: 1px solid #D9DFF0;
-        border-radius: 10px; font-weight: 650; box-shadow: none;
-    }
-    .stButton > button:hover {background: #F2F4FF; border-color: #A8B5EB; color: #4054C4;}
-    .stButton > button[kind="primary"] {
-        background: #5267D8; color: #FFFFFF; border-color: #5267D8;
-        box-shadow: 0 8px 18px rgba(82, 103, 216, .22);
-    }
-    .stButton > button[kind="primary"]:hover {background: #4054C4; color: #FFFFFF;}
-    [data-testid="stExpander"] {
-        border: 1px solid #E4E8F0; border-radius: 12px; background: #FFFFFF;
-        box-shadow: 0 4px 14px rgba(42, 53, 89, .035);
-    }
-    [data-testid="stStatusWidget"], [data-testid="stAlert"] {
-        border-radius: 12px; border-color: #DDE3F2;
-    }
-    .evidence-heading {color: #20243A; font-size: 1.05rem; font-weight: 750; margin-top: 1rem;}
-    .verified-badge {color: #16866A; background: #EEF9F5; border-radius: 999px; padding: .25rem .55rem; font-size: .78rem; font-weight: 700;}
-    .file-chip {
-        display: inline-flex; align-items: center; margin: .15rem .35rem .1rem 0; padding: .38rem .62rem;
-        color: #4452A9; background: #F1F3FF; border: 1px solid #DCE2FF; border-radius: 8px;
-        font-size: .83rem; font-weight: 600;
-    }
-    .selected-files {margin-top: .15rem; margin-bottom: .55rem;}
-    .suggestion-label {color: #687087; font-size: .86rem; font-weight: 700; margin: .55rem 0 .5rem;}
-    div[data-testid="stHorizontalBlock"] .stButton > button {
-        min-height: 50px; padding: .55rem .65rem; text-align: left; white-space: normal;
-        font-size: .83rem; line-height: 1.15; background: #FFFFFF;
-    }
-    [data-testid="stVerticalBlockBorderWrapper"] {
-        border-color: #E4E8F0 !important; border-radius: 12px !important;
-        box-shadow: 0 4px 14px rgba(42, 53, 89, .035);
-    }
-    hr {border-color: #E4E8F0 !important;}
-    .stCaption, [data-testid="stCaptionContainer"] {color: #687087 !important;}
-    @media (max-width: 700px) {
-        .block-container {padding: 1.5rem 1rem 2rem;}
-        .documind-title {font-size: 2.1rem;}
-    }
-    </style>""",
-    unsafe_allow_html=True,
-)
+inject_css()
 st.markdown('<div class="documind-title">📄 DocuMind</div>', unsafe_allow_html=True)
 st.markdown('<div class="documind-subtitle">Intelligent answers from your documents.</div>', unsafe_allow_html=True)
 st.markdown('<div class="documind-tagline">● Evidence verified · Private and local</div>', unsafe_allow_html=True)
