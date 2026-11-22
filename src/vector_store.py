@@ -1,96 +1,53 @@
-"""
-vector_store.py
-----------------
-This module manages the FAISS vector database.
+"""Small, exact FAISS cosine-similarity index for DocuMind."""
 
-WHAT IS FAISS?
-FAISS (Facebook AI Similarity Search) is a library that stores
-embedding vectors and allows us to quickly find the most similar
-vectors to a given query vector.
+from __future__ import annotations
 
-Think of it like a search engine, but instead of searching for
-keywords, it searches for semantic similarity using math (cosine or
-L2 distance between vectors).
-
-WHAT DOES THIS MODULE DO?
-1. build_faiss_index()
-   → Takes all the chunk embeddings, creates a FAISS index,
-     and stores the chunk metadata alongside it.
-
-2. search_index()
-   → Takes a query embedding, asks FAISS to find the top-k
-     most similar chunks, and returns those chunks with their metadata.
-
-HOW SIMILARITY SEARCH WORKS:
-  1. We have N chunks, each represented as a 384-dim vector stored in FAISS.
-  2. The user asks a question. We convert it to a 384-dim vector.
-  3. FAISS computes the distance between the query vector and ALL chunk vectors.
-  4. FAISS returns the indices of the top-k closest chunks (the most relevant ones).
-  5. We use those indices to look up the original chunk text and metadata.
-"""
+import re
 
 import faiss
 import numpy as np
 
 
+def _text_key(text: str) -> str:
+    return re.sub(r"\W+", "", text).casefold()
+
+
 def build_faiss_index(embeddings: np.ndarray, chunks: list[dict]) -> tuple:
-    """
-    Builds a FAISS index from the provided embeddings.
-
-    Parameters:
-    - embeddings: 2D numpy array of shape (num_chunks, embedding_dim)
-                  Each row is the embedding for one chunk.
-    - chunks:     List of chunk dicts with "text", "source", "page".
-
-    Returns a tuple: (faiss_index, chunks)
-    We return chunks alongside the index because FAISS only stores vectors —
-    it doesn't store the original text or metadata. We need to keep
-    that separately (in the 'chunks' list) and use the index position
-    to look up the metadata when FAISS tells us which chunks are relevant.
-    """
-
-    # Determine the size of each embedding vector (should be 384)
-    embedding_dimension = embeddings.shape[1]
-
-    # Create a flat (brute-force) L2 distance index.
-    # "Flat" means FAISS will check all vectors — no approximation.
-    # This is perfectly fine for small-to-medium document collections.
-    # L2 = Euclidean distance. Smaller distance = more similar vectors.
-    index = faiss.IndexFlatL2(embedding_dimension)
-
-    # Add all chunk embeddings to the FAISS index
-    index.add(embeddings)
-
-    print(f"FAISS index built with {index.ntotal} vectors.")
-
+    """Build an exact inner-product index over unit-normalised embeddings."""
+    if len(chunks) == 0 or embeddings.ndim != 2 or embeddings.shape[0] != len(chunks):
+        raise ValueError("Embeddings and chunks must be non-empty and have matching lengths.")
+    vectors = np.ascontiguousarray(embeddings, dtype="float32")
+    faiss.normalize_L2(vectors)  # defensive: cosine search requires unit vectors
+    index = faiss.IndexFlatIP(vectors.shape[1])
+    index.add(vectors)
     return index, chunks
 
 
-def search_index(query_embedding: np.ndarray, index, chunks: list[dict], top_k: int = 5) -> list[dict]:
-    """
-    Searches the FAISS index for the most relevant chunks given a query embedding.
+def search_index(
+    query_embedding: np.ndarray,
+    index,
+    chunks: list[dict],
+    top_k: int = 5,
+) -> list[dict]:
+    """Return non-duplicate chunks ordered by cosine similarity."""
+    if index is None or index.ntotal == 0 or top_k <= 0:
+        return []
+    query = np.ascontiguousarray(query_embedding.copy(), dtype="float32")
+    faiss.normalize_L2(query)
+    # Search extra neighbours first so duplicate/overlap chunks do not consume top-k.
+    scores, indices = index.search(query, min(index.ntotal, max(top_k * 3, top_k)))
 
-    Parameters:
-    - query_embedding: The embedded version of the user's question (shape: 1 x 384).
-    - index:           The FAISS index built from our document chunks.
-    - chunks:          The list of chunk dicts (parallel to the FAISS index).
-    - top_k:           How many top results to return. Default is 5.
-
-    Returns:
-    A list of chunk dicts (up to top_k) that are most similar to the query.
-    Each dict contains: {"text": "...", "source": "file.pdf", "page": 3}
-    """
-
-    # D = distances (how similar each result is — lower = better for L2)
-    # I = indices (which chunks in our list are most similar)
-    _, I = index.search(query_embedding, top_k)
-
-    # I[0] gives us the list of indices for the first (and only) query row
-    relevant_chunks = []
-    for idx in I[0]:
-        # FAISS returns -1 if no valid neighbor was found (e.g., index is empty)
-        if idx == -1:
+    results: list[dict] = []
+    seen_texts: set[str] = set()
+    for score, chunk_index in zip(scores[0], indices[0]):
+        if chunk_index < 0:
             continue
-        relevant_chunks.append(chunks[idx])
-
-    return relevant_chunks
+        chunk = chunks[int(chunk_index)]
+        key = _text_key(chunk.get("text", ""))
+        if not key or key in seen_texts:
+            continue
+        seen_texts.add(key)
+        results.append({**chunk, "similarity": float(score)})
+        if len(results) == top_k:
+            break
+    return results
