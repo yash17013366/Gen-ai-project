@@ -1,101 +1,93 @@
-"""
-chunker.py
------------
-This module is responsible for splitting large pages of text into
-smaller, overlapping chunks.
+"""Sentence-aware chunking with source metadata preserved on every chunk."""
 
-WHY DO WE CHUNK?
-Large documents can have pages with thousands of words.
-When we search for relevant content, we want to find the SPECIFIC
-paragraph or section that answers the question — not the entire page.
+from __future__ import annotations
 
-Smaller chunks = more precise retrieval.
-
-HOW IT WORKS:
-We take a block of text and split it into pieces of a fixed size
-(e.g., 500 characters). To avoid cutting off a sentence mid-thought,
-we add an "overlap" — the last few characters of one chunk are
-repeated at the start of the next chunk.
-
-Example (chunk_size=20, overlap=5):
-  Text:    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-  Chunk 1: "ABCDEFGHIJKLMNOPQRST"   (chars 0–19)
-  Chunk 2: "PQRSTUVWXYZ..."          (chars 15–34, overlapping chars 15–19)
-
-This overlap ensures that context is not lost at chunk boundaries.
-"""
+import re
 
 
-def split_text_into_chunks(text: str, chunk_size: int = 500, overlap: int = 100) -> list[str]:
-    """
-    Splits a long text string into overlapping chunks.
+def _normalise_whitespace(text: str) -> str:
+    """Make extracted PDF text readable without changing its meaning."""
+    return re.sub(r"\s+", " ", text).strip()
 
-    Parameters:
-    - text:       The full text to split.
-    - chunk_size: How many characters each chunk should contain.
-    - overlap:    How many characters to repeat from the end of one chunk
-                  at the start of the next chunk (context continuity).
 
-    Returns a list of text strings (the chunks).
-    """
-
-    chunks = []
-    start = 0  # Start position for the current chunk
-
+def _split_long_text(text: str, chunk_size: int, overlap: int) -> list[str]:
+    """Split an unusually long sentence at a word boundary, with overlap."""
+    parts: list[str] = []
+    start = 0
     while start < len(text):
-        # Determine where this chunk ends
-        end = start + chunk_size
+        end = min(start + chunk_size, len(text))
+        if end < len(text):
+            boundary = text.rfind(" ", start, end)
+            if boundary > start:
+                end = boundary
+        part = text[start:end].strip()
+        if part:
+            parts.append(part)
+        if end >= len(text):
+            break
+        start = max(end - overlap, start + 1)
+    return parts
 
-        # Grab the chunk
-        chunk = text[start:end]
 
-        # Only save the chunk if it has meaningful content
-        if chunk.strip():
-            chunks.append(chunk)
+def split_text_into_chunks(
+    text: str, chunk_size: int = 700, overlap: int = 120
+) -> list[str]:
+    """Return mostly sentence-complete chunks, retaining boundary context."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if not 0 <= overlap < chunk_size:
+        raise ValueError("overlap must be at least 0 and smaller than chunk_size")
 
-        # Move the start position forward, but step back by 'overlap'
-        # so the next chunk repeats the last 'overlap' characters
-        start += chunk_size - overlap
+    clean_text = _normalise_whitespace(text)
+    if not clean_text:
+        return []
 
+    # The long-text fallback below also handles tables and pages with no periods.
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", clean_text)
+        if sentence.strip()
+    ]
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        if len(sentence) > chunk_size:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(_split_long_text(sentence, chunk_size, overlap))
+            continue
+
+        candidate = sentence if not current else f"{current} {sentence}"
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+
+        chunks.append(current)
+        boundary_context = current[-overlap:].strip() if overlap else ""
+        current = f"{boundary_context} {sentence}".strip()
+
+    if current:
+        chunks.append(current)
     return chunks
 
 
-def chunk_pages(pages_data: list[dict], chunk_size: int = 500, overlap: int = 100) -> list[dict]:
-    """
-    Takes the list of extracted pages (from pdf_reader.py) and creates
-    smaller chunks from each page's text.
-
-    For EACH chunk, we keep the SAME metadata as the parent page:
-    - source filename
-    - page number
-
-    This is how citations work — every chunk "remembers" where it came from.
-
-    Parameters:
-    - pages_data: List of page dicts from pdf_reader.py
-                  Each dict: {"text": "...", "source": "file.pdf", "page": 3}
-    - chunk_size: Characters per chunk.
-    - overlap:    Characters to repeat between chunks.
-
-    Returns a list of chunk dicts:
-    [
-        {"text": "chunk text...", "source": "file.pdf", "page": 3},
-        ...
-    ]
-    """
-
-    all_chunks = []
-
+def chunk_pages(
+    pages_data: list[dict], chunk_size: int = 700, overlap: int = 120
+) -> list[dict]:
+    """Chunk page text and attach a stable ID and original location to each chunk."""
+    all_chunks: list[dict] = []
     for page in pages_data:
-        # Split this page's text into smaller pieces
-        text_chunks = split_text_into_chunks(page["text"], chunk_size, overlap)
-
-        # For each chunk, attach the original source metadata
-        for chunk_text in text_chunks:
-            all_chunks.append({
-                "text": chunk_text,
-                "source": page["source"],   # e.g., "Academic_Rules.pdf"
-                "page": page["page"]        # e.g., 3
-            })
-
+        for chunk_number, chunk_text in enumerate(
+            split_text_into_chunks(page.get("text", ""), chunk_size, overlap), start=1
+        ):
+            all_chunks.append(
+                {
+                    "chunk_id": f"chunk-{len(all_chunks) + 1:04d}",
+                    "text": chunk_text,
+                    "source": page["source"],
+                    "page": page["page"],
+                    "chunk_number": chunk_number,
+                }
+            )
     return all_chunks
