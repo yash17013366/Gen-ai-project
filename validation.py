@@ -219,3 +219,14 @@ def measure_model_latency(model_name, prompt):
     except requests.RequestException as error:
         print(f"[FAIL] LLM request failed: {error}")
         return None
+
+
+if __name__ == "__main__":
+    # This is intentionally a real local check: it never invents a speed figure.
+    from src.rag import OLLAMA_MODEL
+
+    if validate_ollama() and validate_model(OLLAMA_MODEL):
+        measure_model_latency(
+            OLLAMA_MODEL,
+            "Reply with exactly: DocuMind local model check passed.",
+        )
