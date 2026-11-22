@@ -38,7 +38,7 @@ def extract_text_from_pdf(pdf_path: str, filename: str) -> list[dict]:
 
     pages_data = []  # We will collect all pages in this list
 
-    # Open the PDF using PyMuPDF
+    # Open the PDF using PyMuPDF.
     try:
         doc = fitz.open(pdf_path)
     except Exception as e:
@@ -49,8 +49,9 @@ def extract_text_from_pdf(pdf_path: str, filename: str) -> list[dict]:
     for page_index in range(len(doc)):
         page = doc[page_index]
 
-        # Extract all the plain text from this page
-        page_text = page.get_text()
+        # ``sort=True`` gives a more natural reading order in most generated PDFs.
+        # Keep the original 1-based PDF page number even when earlier pages are empty.
+        page_text = page.get_text("text", sort=True)
 
         # Skip pages that have no text (e.g., image-only pages)
         if not page_text.strip():
@@ -58,7 +59,7 @@ def extract_text_from_pdf(pdf_path: str, filename: str) -> list[dict]:
 
         # Store the page text along with its source metadata
         pages_data.append({
-            "text": page_text,
+            "text": page_text.strip(),
             "source": filename,
             "page": page_index + 1  # Convert 0-indexed to 1-indexed page number
         })
