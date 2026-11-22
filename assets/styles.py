@@ -76,6 +76,15 @@ h1, h2, h3, h4,
     color: #1F1B16 !important;
     font-family: 'Poppins', Inter, sans-serif !important;
     font-weight: 700 !important;
+    font-size: 2.75rem !important;   /* ~44px */
+    line-height: 1.15 !important;
+}
+/* Scale the emoji/icon beside the title proportionally */
+.documind-title > img,
+.documind-title [data-testid="stImage"],
+.documind-title span[role="img"] {
+    font-size: 2.75rem !important;
+    vertical-align: middle !important;
 }
 /* Subtitle / tagline */
 .documind-subtitle {
@@ -307,17 +316,20 @@ div[data-testid="stError"] svg { color: #B4533F !important; fill: #B4533F !impor
     background: #FDFBF6 !important;
     border: 1px solid #E8E1D2 !important;
     border-radius: 12px !important;
-    padding: 0.85rem 1rem !important;
+    padding: 0.5rem 0.7rem !important;   /* tighter, proportional to smaller text */
     box-shadow: 0 2px 8px rgba(80,60,30,0.04) !important;
 }
 [data-testid="stMetricLabel"] {
     color: #8C8374 !important;
-    font-size: 0.8rem !important;
+    font-size: 0.72rem !important;   /* ~11-12px, down 30% from ~16px */
     font-weight: 600 !important;
+    line-height: 1.3 !important;
 }
 [data-testid="stMetricValue"] {
     color: #1F1B16 !important;
     font-weight: 700 !important;
+    font-size: 1.9rem !important;    /* ~30-31px, down 30% from ~44px */
+    line-height: 1.2 !important;
 }
 [data-testid="stMetricDelta"] { color: #6B8F5E !important; }
 
